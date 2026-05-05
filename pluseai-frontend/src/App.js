@@ -341,7 +341,7 @@ export default function App() {
               <div className="loading-card">
                 <div className="loading-spinner" />
                 <p>Fetching live data and running BERT analysis...</p>
-                <p className="loading-sub">Pulling from NewsAPI + HackerNews simultaneously</p>
+                <p className="loading-sub"> Pulling from NewsAPI · HackerNews · YouTube · Twitter · Reddit · Instagram</p>
               </div>
             )}
 
@@ -351,7 +351,7 @@ export default function App() {
                   <div className="score-left">
                     <p className="score-query">"{data.query}"</p>
                     <p className="score-sub">
-                      {data.total} posts analyzed from {data.sources.newsapi} news + {data.sources.hackernews} HN posts
+                        {data.total} posts analyzed from {data.sources.newsapi} news · {data.sources.hackernews} HN · {data.sources.youtube} YT · {data.sources.twitter} Twitter · {data.sources.reddit} Reddit · {data.sources.instagram} Instagram
                     </p>
                   </div>
                   <div className="score-right">

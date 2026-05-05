@@ -28,11 +28,16 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy import create_engine, text
+from googleapiclient.discovery import build
+from xpoz import XpozClient, ResponseType
+
 
 load_dotenv()
 
 # ── Config ───────────────────────────────────────────────────
+XPOZ_API_KEY = os.getenv("XPOZ_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 MODEL_PATH   = os.getenv("MODEL_PATH", "models/bert_sentiment")
 SECRET_KEY   = os.getenv("SECRET_KEY", "pulseai-secret-key-change-in-production")
 ALGORITHM    = "HS256"
@@ -119,7 +124,8 @@ def clean_text(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip().lower()
 
 def predict(text: str) -> dict:
-    cleaned = clean_text(text)
+    cleaned = clean_text(p["text"])
+    sentiment = predict(cleaned)
     if not cleaned.strip():
         return {"label": "Neutral", "score": 0, "confidence": 0.0, "prob_pos": 0.0, "prob_neg": 0.0}
     enc = tokenizer(cleaned, return_tensors='pt', max_length=128,
@@ -131,7 +137,7 @@ def predict(text: str) -> dict:
     confidence = round(max(probs), 4)
 
     # If confidence is low, classify as Neutral
-    if confidence < 0.65:
+    if confidence < 0.60:
         label = "Neutral"
         score = 0
     elif pred == 1:
@@ -163,7 +169,7 @@ def get_aspect_sentiment(texts: list, aspects: dict) -> dict:
         if not relevant:
             results[aspect] = {"pos_pct": 50, "neg_pct": 50, "total": 0}
             continue
-        preds = [predict(t) for t in relevant[:30]]
+        preds = [predict(t) for t in relevant[:100]]
         pos   = sum(1 for p in preds if p["score"] == 1)
         total = len(preds)
         results[aspect] = {
@@ -210,6 +216,141 @@ def fetch_hackernews(query: str, limit: int = 30) -> list:
         print(f"HackerNews error: {e}")
         return []
 
+
+def fetch_youtube(query: str, max_videos: int = 5, comments_per_video: int = 50):
+    try:
+        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+
+        # Step 1: search videos
+        search_response = youtube.search().list(
+            q=query,
+            part="id,snippet",
+            maxResults=max_videos,
+            type="video"
+        ).execute()
+        posts = []
+        for item in search_response.get("items", []):
+            video_id = item["id"]["videoId"]
+            video_title = item["snippet"]["title"]
+
+            # Step 2: fetch comments
+            comments_response = youtube.commentThreads().list(
+                part="snippet",
+                videoId=video_id,
+                maxResults=comments_per_video,
+                textFormat="plainText"
+            ).execute()
+            seen_comments = set()
+            for c in comments_response.get("items", []):
+                comment = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
+                if comment in seen_comments:
+                    continue
+                seen_comments.add(comment)
+                posts.append({
+                    "id": f"yt_{video_id}",
+                    "title": video_title,
+                    "text": comment,
+                    "source": "YouTube",
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "time": "",
+                    "type": "youtube"
+                })
+        return posts
+    except Exception as e:
+        print(f"YouTube API error: {e}")
+        return []
+    
+
+def fetch_xpoz_twitter(query: str, limit: int = 30) -> list:
+    try:
+        with XpozClient(XPOZ_API_KEY) as client:
+            results = client.twitter.search_posts(
+                query,
+                response_type=ResponseType.FAST,
+                limit=limit,
+                fields=["id", "text", "author_username", "like_count",
+                        "retweet_count", "created_at_date", "lang"]
+            )
+            posts = []
+            for t in results.data:
+                text = t.text or ""
+                if not text.strip():
+                    continue
+                posts.append({
+                    "id":     t.id or "",
+                    "title":  text[:80],
+                    "text":   text,
+                    "source": "Twitter/X",
+                    "url":    f"https://twitter.com/i/web/status/{t.id}" if t.id else "",
+                    "time":   t.created_at_date or "",
+                    "type":   "twitter"
+                })
+            return posts
+    except Exception as e:
+        print(f"Xpoz Twitter error: {e}")
+        return []
+
+
+def fetch_xpoz_reddit(query: str, limit: int = 30) -> list:
+    try:
+        with XpozClient(XPOZ_API_KEY) as client:
+            results = client.reddit.search_posts(
+                query,
+                response_type=ResponseType.FAST,
+                limit=limit,
+                sort="relevance",
+                fields=["id", "title", "selftext", "author_username",
+                        "subreddit_name", "score", "created_at_date", "url"]
+            )
+            posts = []
+            for r in results.data:
+                text = f"{r.title or ''} {r.selftext or ''}".strip()
+                if not text.strip():
+                    continue
+                posts.append({
+                    "id":     r.id or "",
+                    "title":  r.title or "",
+                    "text":   text,
+                    "source": f"Reddit r/{r.subreddit_name}" if r.subreddit_name else "Reddit",
+                    "url":    r.url or "",
+                    "time":   r.created_at_date or "",
+                    "type":   "reddit"
+                })
+            return posts
+    except Exception as e:
+        print(f"Xpoz Reddit error: {e}")
+        return []
+
+
+def fetch_xpoz_instagram(query: str, limit: int = 30) -> list:
+    try:
+        with XpozClient(XPOZ_API_KEY) as client:
+            results = client.instagram.search_posts(
+                query,
+                response_type=ResponseType.FAST,
+                limit=limit,
+                fields=["id", "caption", "username", "like_count",
+                        "comment_count", "created_at_date"]
+            )
+            posts = []
+            for p in results.data:
+                text = p.caption or ""
+                if not text.strip():
+                    continue
+                posts.append({
+                    "id":     p.id or "",
+                    "title":  text[:80],
+                    "text":   text,
+                    "source": "Instagram",
+                    "url":    "",
+                    "time":   p.created_at_date or "",
+                    "type":   "instagram"
+                })
+            return posts
+    except Exception as e:
+        print(f"Xpoz Instagram error: {e}")
+        return []
+
 # ── Pydantic models ──────────────────────────────────────────
 class RegisterRequest(BaseModel):
     username: str
@@ -218,7 +359,7 @@ class RegisterRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     query: str
-    limit: Optional[int] = 40
+    limit: Optional[int] = 200
 
 class CompareRequest(BaseModel):
     query1: str
@@ -283,12 +424,30 @@ def me(username: str = Depends(get_current_user)):
 
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest, username: str = Depends(get_current_user)):
-    """Main endpoint — fetch from both sources, run BERT, return full analysis."""
-    limit_each = req.limit // 2
+    limit_each = req.limit // 6  # now split across 6 sources
 
+    # Existing sources
     news_posts = fetch_newsapi(req.query, limit_each)
     hn_posts   = fetch_hackernews(req.query, limit_each)
-    all_posts  = news_posts + hn_posts
+    yt_posts   = fetch_youtube(req.query, max_videos=3, comments_per_video=10)
+
+    # New Xpoz sources
+    tw_posts = fetch_xpoz_twitter(req.query, limit_each)
+    rd_posts = fetch_xpoz_reddit(req.query, limit_each)
+    ig_posts = fetch_xpoz_instagram(req.query, limit_each)
+
+    all_posts = news_posts + hn_posts + yt_posts + tw_posts + rd_posts + ig_posts
+
+    seen = set()
+    unique_posts = []
+
+    # Remove Duplicates
+    for p in all_posts:
+        text = p["text"].strip().lower()
+        if text not in seen:
+            seen.add(text)
+            unique_posts.append(p)
+    all_posts = unique_posts
 
     if not all_posts:
         raise HTTPException(404, f"No data found for: {req.query}")
@@ -328,24 +487,31 @@ def analyze(req: AnalyzeRequest, username: str = Depends(get_current_user)):
             conn.commit()
 
     return {
-    "query":   req.query,
-    "total":   total,
-    "sources": {"newsapi": len(news_posts), "hackernews": len(hn_posts)},
-    "summary": {
-        "positive":        len(pos),
-        "negative":        len(neg),
-        "neutral":         len(neutral),
-        "pos_pct":         pos_pct,
-        "neg_pct":         neg_pct,
-        "neutral_pct":     neutral_pct,
-        "avg_confidence":  round(sum(p["confidence"] for p in analyzed)/total, 4),
-        "sentiment_score": pos_pct,
-    },
-    "aspects":      aspect_results,
-    "posts":        analyzed[:30],
-    "pos_keywords": pos_keywords,
-    "neg_keywords": neg_keywords,
-}
+        "query":   req.query,
+        "total":   total,
+        "sources": {
+            "newsapi":    len(news_posts),
+            "hackernews": len(hn_posts),
+            "youtube":    len(yt_posts),
+            "twitter":    len(tw_posts),
+            "reddit":     len(rd_posts),
+            "instagram":  len(ig_posts),
+        },
+        "summary": {
+            "positive":        len(pos),
+            "negative":        len(neg),
+            "neutral":         len(neutral),
+            "pos_pct":         pos_pct,
+            "neg_pct":         neg_pct,
+            "neutral_pct":     neutral_pct,
+            "avg_confidence":  round(sum(p["confidence"] for p in analyzed)/total, 4),
+            "sentiment_score": pos_pct,
+        },
+        "aspects":      aspect_results,
+        "posts":        analyzed[:30],
+        "pos_keywords": pos_keywords,
+        "neg_keywords": neg_keywords,
+    }
 
 @app.post("/compare")
 def compare(req: CompareRequest, username: str = Depends(get_current_user)):
