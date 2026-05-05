@@ -1,9 +1,24 @@
-# requirements.txt
-fastapi==0.108.0
-uvicorn==0.25.0
-python-dotenv==1.0.0
-transformers==4.36.2
-torch==2.1.2
+# # requirements.txt
+# fastapi==0.108.0
+# uvicorn==0.25.0
+# python-dotenv==1.0.0
+# transformers==4.36.2
+# torch>=2.6.0,<3.0
+# requests==2.31.0
+# python-jose[cryptography]==3.3.0
+# passlib[bcrypt]==1.7.4
+# python-multipart==0.0.6
+# reportlab==4.0.8
+
+
+# fastapi==0.108.0
+# uvicorn==0.25.0
+# python-dotenv==1.0.0
+
+# Upgrade to versions that support newer Python
+transformers>=4.45.0
+tokenizers>=0.20.0
+torch>=2.6.0,<3.0
 requests==2.31.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
